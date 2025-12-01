@@ -18,7 +18,7 @@ def ottieni_report_finanziario():
         print("[INFO] Connessione a Google Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = """Sei un esperto analista finanziario italiano. 
 Fornisci un breve resoconto (max 200 parole) delle 3 notizie finanziarie più importanti di oggi:
