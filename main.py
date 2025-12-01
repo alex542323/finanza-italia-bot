@@ -4,6 +4,8 @@ from datetime import datetime
 import google.generativeai as genai
 import time
 import pprint
+import re
+import math
 
 # --- CARICA VARIABILI D'AMBIENTE ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -14,7 +16,13 @@ TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 TG_MAX_LENGTH = 4096
-TG_MESSAGE_MAX = 800  # lunghezza massima desiderata per il messaggio Telegram (più breve)
+TG_MESSAGE_MAX = 800  # lunghezza massima desiderata per ogni singolo messaggio Telegram (utente ha chiesto messaggi brevi)
+
+SECTION_TITLES = [
+    "1) CATHIE WOOD & ARK INVEST",
+    "2) BITCOIN & MERCATO CRYPTO",
+    "3) MACROECONOMIA"
+]
 
 def _extract_text_and_safety_from_response(response):
     """
@@ -142,29 +150,31 @@ def ottieni_report_cathie_wood_crypto():
         print("[INFO] Usando modello: gemini-2.5-flash (STABILE)")
         model = genai.GenerativeModel('gemini-2.5-flash')
         
+        # Prompt progettato per generare tre sezioni numerate (1,2,3).
+        # È importante mantenere i numeri in testa alle sezioni perché il parser li userà.
         prompt = """Sei un esperto di investimenti e mercati crypto altamente qualificato.
+Rispondi in tre sezioni numerate (1, 2, 3). Fornisci un BREVE resoconto per ogni sezione (1-2 frasi ciascuna), rispettando i seguenti punti:
 
-Fornisci un BREVE resoconto (150-200 parole) su:
-
-1. **CATHIE WOOD & ARK INVEST**
+1) CATHIE WOOD & ARK INVEST
    - Ultime strategie e dichiarazioni
    - Recenti movimenti nei crypto
 
-2. **BITCOIN & MERCATO CRYPTO**
+2) BITCOIN & MERCATO CRYPTO
    - Prezzo e trend attuali
    - Principali movimenti oggi
 
-3. **MACROECONOMIA**
+3) MACROECONOMIA
    - Fed e liquidità
    - Impatto su crypto
 
-Sii conciso e specifico con numeri."""
-        
+IMPORTANTE: Inizia ogni sezione con "1.", "2." e "3." (ad es. "1. ..."), ogni sezione deve essere breve (1-2 frasi). Non includere altri numeri fuori dalle intestazioni delle tre sezioni.
+"""
+
         print("[INFO] Invio richiesta a Gemini...")
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1500,
+                max_output_tokens=800,
                 temperature=0.7,
             )
         )
@@ -184,7 +194,6 @@ Sii conciso e specifico con numeri."""
                 print("[INFO] Safety info trovata:")
                 pprint.pprint(meta["safety_info"])
             print("[INFO] Meta:", {k: meta.get(k) for k in ("finish_reason","sample_candidates","sample_output_type") if k in meta})
-            # Ritorniamo meta per poter costruire un messaggio di fallback compatto
             return None, meta
 
         print(f"[OK] Report generato: {len(report)} caratteri")
@@ -194,29 +203,98 @@ Sii conciso e specifico con numeri."""
         print(f"[ERRORE] Gemini API: {type(e).__name__}: {str(e)}")
         return None, {"error": str(e)}
 
-def build_telegram_message(report, meta):
-    """Costruisce un messaggio Telegram breve e sicuro per la lunghezza."""
-    header = f"🚀 CATHIE WOOD & CRYPTO MARKET REPORT\n⏰ {datetime.now().strftime('%d/%m/%Y ore %H:%M CET')}\n\n"
-    footer = "\n\n---\n✅ Powered by Google Gemini AI 2.5\n📲 Bot Telegram Automazione Finanza"
-    
+def split_report_into_sections(report):
+    """
+    Prova a estrarre tre sezioni numerate dal testo (1., 2., 3.).
+    Se non riesce, ritorna tre porzioni approssimate di lunghezza uguale.
+    """
     if not report:
-        # Messaggio di fallback molto breve
+        return []
+
+    # Primo tentativo: trovare posizioni di '1.', '2.' e '3.' all'inizio di una linea
+    positions = {}
+    for i in (1, 2, 3):
+        m = re.search(r'(?m)^\s*' + str(i) + r'[\).\s-]+', report)
+        if m:
+            positions[i] = m.start()
+
+    sections = []
+    if 1 in positions and 2 in positions:
+        # usa i boundaries trovati; se manca '3' prendi fino alla fine
+        start1 = positions[1]
+        start2 = positions[2]
+        start3 = positions.get(3, None)
+        sec1 = report[start1:start2].strip()
+        if start3:
+            sec2 = report[start2:start3].strip()
+            sec3 = report[start3:].strip()
+        else:
+            sec2 = report[start2:].strip()
+            sec3 = ""
+        sections = [sec1, sec2, sec3]
+        # rimuovi eventuali numerazioni iniziali "1." ecc
+        sections = [re.sub(r'^\s*\d+[\).\s-]+\s*', '', s, count=1).strip() for s in sections if s is not None]
+        # assicurati di avere esattamente 3 voci (padding vuote se necessario)
+        while len(sections) < 3:
+            sections.append("")
+        return sections[:3]
+
+    # Secondo tentativo: split by "###SECTION" markers (se l'utente ha usato un altro stile)
+    if "###SECTION" in report:
+        parts = re.split(r'###SECTION\d+###', report)
+        parts = [p.strip() for p in parts if p.strip()]
+        # normalizza a 3
+        while len(parts) < 3:
+            parts.append("")
+        return parts[:3]
+
+    # Fallback: suddividi in 3 parti per parole
+    words = report.split()
+    if not words:
+        return ["", "", ""]
+    total = len(words)
+    part = math.ceil(total / 3)
+    s1 = " ".join(words[0:part]).strip()
+    s2 = " ".join(words[part:part*2]).strip()
+    s3 = " ".join(words[part*2:]).strip()
+    return [s1, s2, s3]
+
+def build_three_telegram_messages(report, meta):
+    """
+    Costruisce tre messaggi Telegram, uno per ciascuna sezione.
+    Se report è None, costruisce tre messaggi fallback molto brevi (o un solo messaggio di errore).
+    """
+    timestamp = datetime.now().strftime('%d/%m/%Y ore %H:%M CET')
+
+    if not report:
+        # Messaggio di fallback breve (in un unico messaggio)
         reason = meta.get("finish_reason") or meta.get("error") or "Nessuna risposta valida"
         msg = f"⚠️ Nessun contenuto generato da Gemini.\nMotivo: {reason}"
-        # aggiungi info safety se presente (compatta)
         if meta.get("safety_info"):
             msg += "\nSafety: risposta bloccata"
-        return header + msg + footer
+        header_footer = f"🚀 CATHIE WOOD & CRYPTO MARKET REPORT\n⏰ {timestamp}\n\n"
+        footer = "\n\n---\n✅ Powered by Google Gemini AI 2.5\n📲 Bot Telegram Automazione Finanza"
+        # Inviaamo il fallback come singolo messaggio
+        return [header_footer + msg + footer]
 
-    # Troncamento sicuro per Telegram (richiesta dell'utente: messaggi corti)
-    if len(report) > TG_MESSAGE_MAX:
-        short = report[:TG_MESSAGE_MAX].rstrip()
-        short += "\n\n... (troncato)"
-    else:
-        short = report
+    # Ottieni le 3 sezioni
+    secs = split_report_into_sections(report)
 
-    # Manteniamo il messaggio in Markdown semplice
-    return header + short + footer
+    messages = []
+    for idx, sec in enumerate(secs):
+        title = SECTION_TITLES[idx] if idx < len(SECTION_TITLES) else f"{idx+1}) Sezione"
+        header = f"🚀 {title}\n⏰ {timestamp}\n\n"
+        # Troncamento per sicurezza
+        text = sec.strip()
+        if not text:
+            text = "(Nessun contenuto per questa sezione)"
+        if len(text) > TG_MESSAGE_MAX:
+            text = text[:TG_MESSAGE_MAX].rstrip() + "\n\n... (troncato)"
+        footer = "\n\n---\n✅ Powered by Google Gemini AI 2.5" if idx == len(secs)-1 else ""  # footer solo sull'ultimo messaggio
+        # aggiungiamo un indicatore 1/3, 2/3, 3/3
+        pagesuffix = f"\n\n({idx+1}/3)"
+        messages.append(header + text + pagesuffix + footer)
+    return messages
 
 def invia_telegram_con_retry(testo, retry=0):
     """Invia messaggio a Telegram con retry e gestione errori"""
@@ -229,7 +307,7 @@ def invia_telegram_con_retry(testo, retry=0):
         print("[ERRORE] Messaggio vuoto!")
         return False
     
-    # Dividi messaggi lunghi (ma costruiamo messaggi già brevi con build_telegram_message)
+    # Dividi messaggi lunghi (ma build_three_telegram_messages dovrebbe già produrre messaggi brevi)
     chunks = [testo[i:i+TG_MAX_LENGTH] for i in range(0, len(testo), TG_MAX_LENGTH)]
     
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -296,23 +374,31 @@ def main():
     print("\n[STEP 1] Generazione report Cathie Wood + Crypto...")
     report, meta = ottieni_report_cathie_wood_crypto()
     
-    # Costruisci messaggio breve per Telegram (anche in caso di fallback)
-    messaggio = build_telegram_message(report, meta)
+    # Costruisci fino a tre messaggi per Telegram
+    messages = build_three_telegram_messages(report, meta)
     
-    # Step 4: Invia su Telegram
-    print("\n[STEP 2] Invio a Telegram...")
-    success = invia_telegram_con_retry(messaggio)
+    # Step 4: Invia su Telegram — invia ogni messaggio separatamente
+    print("\n[STEP 2] Invio a Telegram dei singoli messaggi (3)...")
+    all_ok = True
+    for idx, m in enumerate(messages, start=1):
+        print(f"[INFO] Invio messaggio {idx}/{len(messages)}...")
+        ok = invia_telegram_con_retry(m)
+        if not ok:
+            all_ok = False
+            print(f"[ERRORE] Invio messaggio {idx} fallito.")
+        # piccolo delay per evitare ratelimit
+        time.sleep(1)
     
     # Step 5: Resoconto finale
     print("\n" + "=" * 80)
-    if success:
+    if all_ok:
         print("✅✅✅ AUTOMAZIONE COMPLETATA CON SUCCESSO ✅✅✅")
-        print("Messaggio inviato a Telegram!")
+        print("Messaggi inviati a Telegram!")
     else:
-        print("❌ ERRORE: Impossibile inviare il messaggio a Telegram")
+        print("❌ ERRORE: Uno o più messaggi non sono stati inviati correttamente")
     print("=" * 80)
     
-    return success
+    return all_ok
 
 if __name__ == "__main__":
     main()
