@@ -16,7 +16,7 @@ TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 TG_MAX_LENGTH = 4096
-TG_CHUNK_SIZE = 2000  # l'utente ha richiesto 2000 caratteri per i primi due messaggi
+TG_CHUNK_SIZE = 4000  # l'utente ha richiesto 2000 caratteri per i primi due messaggi
 
 SECTION_TITLES = [
     "1) CATHIE WOOD & ARK INVEST",
@@ -152,7 +152,7 @@ Rispondi in tre sezioni numerate (1, 2, 3). Fornisci un BREVE resoconto per ogni
 
 3) MACROECONOMIA
    - Fed e liquidità
-   - Impatto su crypto
+   - Impatto su etf
 
 IMPORTANTE: Inizia ogni sezione con "1.", "2." e "3." (ad es. "1. ..."), ogni sezione deve essere breve (1-2 frasi). Non includere altri numeri fuori dalle intestazioni delle tre sezioni.
 """
