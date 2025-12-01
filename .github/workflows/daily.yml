@@ -2,7 +2,9 @@ name: Daily Finance Report
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 7 * * *'   # 08:00 CET (mattina)
+    - cron: '0 13 * * *'  # 14:00 CET (pomeriggio)
+    - cron: '0 17 * * *'  # 18:00 CET (sera)
   
   workflow_dispatch:
 
