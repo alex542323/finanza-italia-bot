@@ -13,7 +13,6 @@ TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 TG_MAX_LENGTH = 4096
-GEMINI_TIMEOUT = 30
 
 def ottieni_report_cathie_wood_crypto():
     """Genera report su Cathie Wood, ARK Invest e Crypto Market - VERSIONE STABILE"""
@@ -26,13 +25,9 @@ def ottieni_report_cathie_wood_crypto():
         print("[INFO] Configurazione Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # Tenta con il modello più stabile
-        try:
-            print("[INFO] Tentativo con gemini-pro...")
-            model = genai.GenerativeModel('gemini-pro')
-        except:
-            print("[INFO] gemini-pro non disponibile, provo con gemini-2.0-flash...")
-            model = genai.GenerativeModel('gemini-2.0-flash')
+        # Usa il modello CORRETTO: gemini-2.5-flash
+        print("[INFO] Usando modello: gemini-2.5-flash (STABILE)")
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = """Sei un esperto di investimenti e mercati crypto altamente qualificato.
 
@@ -56,7 +51,7 @@ Sii conciso e specifico con numeri."""
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1000,
+                max_output_tokens=800,
                 temperature=0.7,
             )
         )
@@ -163,8 +158,9 @@ def main():
 {report}
 
 ---
-✅ *Powered by Google Gemini AI*
-📲 *Bot Telegram Automazione Finanza*"""
+✅ *Powered by Google Gemini AI 2.5*
+📲 *Bot Telegram Automazione Finanza*
+⏰ *Aggiornamento giornaliero: 08:00 CET*"""
     
     # Step 4: Invia su Telegram
     print("\n[STEP 2] Invio a Telegram...")
