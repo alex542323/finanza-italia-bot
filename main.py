@@ -14,96 +14,131 @@ TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 TG_MAX_LENGTH = 4096
+TG_MESSAGE_MAX = 800  # lunghezza massima desiderata per il messaggio Telegram (più breve)
 
 def _extract_text_and_safety_from_response(response):
     """
-    Tenta di estrarre il testo dalla response di Gemini in modo robusto
-    e restituisce una tupla (text, safety_info) dove text può essere None
-    se la risposta è stata bloccata o non contiene testo.
-    Questo gestisce diversi formati di oggetto di risposta.
+    Estrae testo e info di safety da diversi formati di response del client Gemini.
+    Ritorna (text, meta) dove meta è un dict con finish_reason e safety_info utili al fallback.
     """
     safety_info = []
+    meta = {}
     text = None
 
-    # 1) Quick accessor (se disponibile)
+    # Finish reason / metadata per debug
+    for fname in ("finishreason", "finish_reason", "finishReason"):
+        if hasattr(response, fname):
+            try:
+                meta["finish_reason"] = getattr(response, fname)
+            except Exception:
+                meta["finish_reason"] = repr(getattr(response, fname))
+
+    # Quick accessor (se disponibile)
     try:
         if hasattr(response, "text") and response.text:
             text = response.text.strip()
-            return text, safety_info
+            return text, meta
     except Exception:
-        # fallthrough, user saw an error con questo accessor
         pass
 
-    # 2) Cerca "candidates" o altri attributi comuni
-    candidates = None
-    for attr in ("candidates", "outputs", "responses", "items"):
+    # Cerca candidati / outputs
+    candidate_containers = []
+    for attr in ("candidates", "outputs", "responses", "items", "output"):
         if hasattr(response, attr):
             try:
-                candidates = getattr(response, attr)
-                break
+                val = getattr(response, attr)
+                candidate_containers.append(val)
             except Exception:
-                candidates = None
+                continue
 
-    if candidates:
+    candidates = []
+    for cset in candidate_containers:
         try:
-            for idx, c in enumerate(candidates):
-                # Raccogli info di safety se presenti
-                for sattr in ("safety_ratings", "safetyRatings", "safety"):
-                    if hasattr(c, sattr):
-                        try:
-                            safety_info.append({sattr: getattr(c, sattr)})
-                        except Exception:
-                            safety_info.append({sattr: repr(getattr(c, sattr))})
+            if isinstance(cset, (list, tuple)):
+                candidates.extend(cset)
+            else:
+                candidates.append(cset)
+        except Exception:
+            continue
 
-                # Proviamo diversi nomi possibili per il testo
-                for tattr in ("content", "text", "output", "message", "candidate"):
-                    if hasattr(c, tattr):
-                        try:
-                            val = getattr(c, tattr)
-                            # se è stringa
-                            if isinstance(val, str) and val.strip():
-                                return val.strip(), safety_info
-                            # se è un oggetto con sub-attributi
-                            for sub in ("text", "content"):
-                                if hasattr(val, sub):
-                                    subval = getattr(val, sub)
-                                    if isinstance(subval, str) and subval.strip():
-                                        return subval.strip(), safety_info
-                        except Exception:
-                            continue
-
-                # fallback: prova a convertire l'oggetto candidato in stringa
-                try:
-                    s = str(c).strip()
-                    if s:
-                        return s, safety_info
-                except Exception:
-                    continue
+    # Funzione ricorsiva per estrarre testo da strutture annidate
+    def extract_text_from_obj(obj):
+        if isinstance(obj, str) and obj.strip():
+            return obj.strip()
+        if isinstance(obj, dict):
+            for key in ("content", "text", "output", "message", "body"):
+                if key in obj and obj[key]:
+                    res = extract_text_from_obj(obj[key])
+                    if res:
+                        return res
+            for v in obj.values():
+                res = extract_text_from_obj(v)
+                if res:
+                    return res
+        if isinstance(obj, (list, tuple)):
+            for el in obj:
+                res = extract_text_from_obj(el)
+                if res:
+                    return res
+        try:
+            for attr in ("content", "text", "output", "message"):
+                if hasattr(obj, attr):
+                    val = getattr(obj, attr)
+                    res = extract_text_from_obj(val)
+                    if res:
+                        return res
         except Exception:
             pass
+        return None
 
-    # 3) Ultimo tentativo: stampa repr() dell'intera response (per debug)
+    sample_types = []
+    for c in candidates:
+        sample_types.append(type(c).__name__)
+        for sattr in ("safety_ratings", "safetyRatings", "safety"):
+            if hasattr(c, sattr):
+                try:
+                    safety_info.append({sattr: getattr(c, sattr)})
+                except Exception:
+                    safety_info.append({sattr: repr(getattr(c, sattr))})
+        try:
+            t = extract_text_from_obj(c)
+            if t:
+                meta["sample_candidates"] = sample_types
+                if safety_info:
+                    meta["safety_info"] = safety_info
+                return t, meta
+        except Exception:
+            continue
+
+    # Ultimo tentativo: prova response.output
     try:
-        repr_resp = repr(response)
-        if repr_resp and len(repr_resp) < 5000:
-            return repr_resp, safety_info
+        if hasattr(response, "output"):
+            out = getattr(response, "output")
+            t = extract_text_from_obj(out)
+            if t:
+                meta["sample_output_type"] = type(out).__name__
+                if safety_info:
+                    meta["safety_info"] = safety_info
+                return t, meta
     except Exception:
         pass
 
-    return None, safety_info
+    if safety_info:
+        meta["safety_info"] = safety_info
+    meta.setdefault("sample_candidates", sample_types)
+    return None, meta
 
 def ottieni_report_cathie_wood_crypto():
     """Genera report su Cathie Wood, ARK Invest e Crypto Market - VERSIONE STABILE"""
     
     if not GEMINI_API_KEY:
         print("[ERRORE] GEMINI_API_KEY non configurata!")
-        return None
-    
+        return None, {}
+
     try:
         print("[INFO] Configurazione Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # Usa il modello CORRETTO: gemini-2.5-flash
         print("[INFO] Usando modello: gemini-2.5-flash (STABILE)")
         model = genai.GenerativeModel('gemini-2.5-flash')
         
@@ -129,66 +164,59 @@ Sii conciso e specifico con numeri."""
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=800,
+                max_output_tokens=1500,
                 temperature=0.7,
             )
         )
 
-        # Estrai testo in modo robusto e raccogli eventuali informazioni di safety
-        report, safety_info = _extract_text_and_safety_from_response(response)
+        # debug della finish reason se presente
+        for attr in ("finishreason", "finish_reason", "finishReason"):
+            if hasattr(response, attr):
+                try:
+                    print(f"[DEBUG] {attr}: {getattr(response, attr)}")
+                except Exception:
+                    pass
 
-        # Se non abbiamo testo, controlliamo safety_info per capire se è stato bloccato
+        report, meta = _extract_text_and_safety_from_response(response)
         if not report:
             print("[ERRORE] Nessun testo estratto dalla risposta di Gemini.")
-            if safety_info:
+            if meta.get("safety_info"):
                 print("[INFO] Safety info trovata:")
-                pprint.pprint(safety_info)
-                # Prova a verificare se qualche rating indica blocco esplicito
-                blocked = False
-                try:
-                    for s in safety_info:
-                        # safety_info è una lista di dict: controlliamo ricorsivamente
-                        def find_block(x):
-                            if isinstance(x, dict):
-                                for k, v in x.items():
-                                    if isinstance(v, dict) and v.get("blocked") is True:
-                                        return True
-                                    if isinstance(v, (list, dict)):
-                                        if find_block(v):
-                                            return True
-                            if isinstance(x, list):
-                                for e in x:
-                                    if find_block(e):
-                                        return True
-                            return False
-                        if find_block(s):
-                            blocked = True
-                            break
-                except Exception:
-                    blocked = False
+                pprint.pprint(meta["safety_info"])
+            print("[INFO] Meta:", {k: meta.get(k) for k in ("finish_reason","sample_candidates","sample_output_type") if k in meta})
+            # Ritorniamo meta per poter costruire un messaggio di fallback compatto
+            return None, meta
 
-                if blocked:
-                    print("[ERRORE] La risposta sembra essere stata bloccata per motivi di safety. Rivedi e attenua il prompt.")
-                else:
-                    print("[ERRORE] La risposta non contiene una parte testuale utilizzabile. Stampa completa della response per debug:")
-                    try:
-                        pprint.pprint(response)
-                    except Exception:
-                        print(repr(response))
-            else:
-                print("[ERRORE] Nessuna informazione di safety disponibile. Stampa completa della response per debug:")
-                try:
-                    pprint.pprint(response)
-                except Exception:
-                    print(repr(response))
-            return None
-        
         print(f"[OK] Report generato: {len(report)} caratteri")
-        return report
+        return report, meta
         
     except Exception as e:
         print(f"[ERRORE] Gemini API: {type(e).__name__}: {str(e)}")
-        return None
+        return None, {"error": str(e)}
+
+def build_telegram_message(report, meta):
+    """Costruisce un messaggio Telegram breve e sicuro per la lunghezza."""
+    header = f"🚀 CATHIE WOOD & CRYPTO MARKET REPORT\n⏰ {datetime.now().strftime('%d/%m/%Y ore %H:%M CET')}\n\n"
+    footer = "\n\n---\n✅ Powered by Google Gemini AI 2.5\n📲 Bot Telegram Automazione Finanza"
+    
+    if not report:
+        # Messaggio di fallback molto breve
+        reason = meta.get("finish_reason") or meta.get("error") or "Nessuna risposta valida"
+        msg = f"⚠️ Nessun contenuto generato da Gemini.\nMotivo: {reason}"
+        # aggiungi info safety se presente (compatta)
+        if meta.get("safety_info"):
+            msg += "\nSafety: risposta bloccata"
+        return header + msg + footer
+
+    # Troncamento sicuro per Telegram (richiesta dell'utente: messaggi corti)
+    if len(report) > TG_MESSAGE_MAX:
+        short = report[:TG_MESSAGE_MAX].rstrip()
+        short += "\n\n... (troncato)"
+    else:
+        short = report
+
+    # Manteniamo il messaggio in Markdown semplice
+    return header + short + footer
 
 def invia_telegram_con_retry(testo, retry=0):
     """Invia messaggio a Telegram con retry e gestione errori"""
@@ -201,7 +229,7 @@ def invia_telegram_con_retry(testo, retry=0):
         print("[ERRORE] Messaggio vuoto!")
         return False
     
-    # Dividi messaggi lunghi
+    # Dividi messaggi lunghi (ma costruiamo messaggi già brevi con build_telegram_message)
     chunks = [testo[i:i+TG_MAX_LENGTH] for i in range(0, len(testo), TG_MAX_LENGTH)]
     
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -243,7 +271,6 @@ def invia_telegram_con_retry(testo, retry=0):
                 return invia_telegram_con_retry(chunk, retry + 1)
             all_sent = False
         
-        # Pausa tra i messaggi
         if idx < len(chunks):
             time.sleep(1)
     
@@ -267,22 +294,10 @@ def main():
     
     # Step 2: Genera report
     print("\n[STEP 1] Generazione report Cathie Wood + Crypto...")
-    report = ottieni_report_cathie_wood_crypto()
+    report, meta = ottieni_report_cathie_wood_crypto()
     
-    if not report:
-        print("[ERRORE] Impossibile generare report da Gemini")
-        return False
-    
-    # Step 3: Prepara messaggio finale
-    messaggio = f"""🚀 **CATHIE WOOD & CRYPTO MARKET REPORT**
-⏰ {datetime.now().strftime('%d/%m/%Y ore %H:%M CET')}
-
-{report}
-
----
-✅ *Powered by Google Gemini AI 2.5*
-📲 *Bot Telegram Automazione Finanza*
-⏰ *Aggiornamento giornaliero: 08:00 CET*"""
+    # Costruisci messaggio breve per Telegram (anche in caso di fallback)
+    messaggio = build_telegram_message(report, meta)
     
     # Step 4: Invia su Telegram
     print("\n[STEP 2] Invio a Telegram...")
