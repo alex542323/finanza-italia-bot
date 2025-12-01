@@ -18,10 +18,10 @@ def ottieni_report_cathie_wood_crypto():
         print("[INFO] Connessione a Google Gemini API...")
         genai.configure(api_key=GEMINI_API_KEY)
         
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = """Sei un esperto di investimenti e mercati crypto. 
-Fornisci un dettagliato resoconto (max 300 parole) su:
+Fornisci un dettagliato resoconto su:
 
 1. **CATHIE WOOD & ARK INVEST**
    - Ultime dichiarazioni e previsioni di Cathie Wood
@@ -52,29 +52,36 @@ Formato: Usa emoji, punti elenco e sezioni chiare. Sii specifico con i numeri e 
         return f"❌ Errore nella generazione: {str(e)}"
 
 def invia_telegram(testo):
-    """Invia messaggio a Telegram"""
+    """Invia messaggio a Telegram (gestisce messaggi lunghi)"""
     
     if not TG_TOKEN or not TG_CHAT_ID:
         print("[ERRORE] TELEGRAM_TOKEN o TELEGRAM_CHAT_ID mancanti!")
         return False
     
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    max_length = 4096  # Limite di Telegram
     
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": testo,
-        "parse_mode": "Markdown"
-    }
+    # Dividi il messaggio se è troppo lungo
+    chunks = [testo[i:i+max_length] for i in range(0, len(testo), max_length)]
     
-    try:
-        print("[INFO] Invio messaggio a Telegram...")
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        print("[OK] Messaggio inviato su Telegram")
-        return True
-    except Exception as e:
-        print(f"[ERRORE] Invio Telegram fallito: {str(e)}")
-        return False
+    success = True
+    for chunk in chunks:
+        payload = {
+            "chat_id": TG_CHAT_ID,
+            "text": chunk,
+            "parse_mode": "Markdown"
+        }
+        
+        try:
+            print(f"[INFO] Invio chunk a Telegram ({len(chunk)} caratteri)...")
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            print("[OK] Chunk inviato su Telegram")
+        except Exception as e:
+            print(f"[ERRORE] Invio Telegram fallito: {str(e)}")
+            success = False
+    
+    return success
 
 def main():
     print("=" * 80)
