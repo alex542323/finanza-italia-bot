@@ -19,9 +19,9 @@ TG_MAX_LENGTH = 4096
 TG_CHUNK_SIZE = 4000  # l'utente ha richiesto 2000 caratteri per i primi due messaggi
 
 SECTION_TITLES = [
-    "1) CATHIE WOOD & ARK INVEST",
-    "2) BITCOIN & MERCATO CRYPTO",
-    "3) MACROECONOMIA"
+    "1) Indtroduzione",
+    "2) body",
+    "3) Fine"
 ]
 
 def _extract_text_and_safety_from_response(response):
@@ -139,20 +139,16 @@ def ottieni_report_cathie_wood_crypto():
         print("[INFO] Usando modello: gemini-2.5-flash (STABILE)")
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        prompt = """Sei un esperto di investimenti e mercati crypto altamente qualificato.
+        prompt = """Sei un esperto di investimenti e mercati finaziari altamente qualificato.
 Rispondi in tre sezioni numerate (1, 2, 3). Fornisci un BREVE resoconto per ogni sezione (1-2 frasi ciascuna), rispettando i seguenti punti:
 
-1) CATHIE WOOD & ARK INVEST
-   - Ultime strategie e dichiarazioni
-   - Recenti movimenti nei crypto
+1) Primo
+   - What should I know before the markets open today
 
-2) BITCOIN & MERCATO CRYPTO
-   - Prezzo e trend attuali
+2) ETF
+   - Prezzo etf e trend attuali
    - Principali movimenti oggi
-
-3) MACROECONOMIA
-   - Fed e liquidità
-   - Impatto su etf
+3) 
 
 IMPORTANTE: Inizia ogni sezione con "1.", "2." e "3." (ad es. "1. ..."), ogni sezione deve essere breve (1-2 frasi). Non includere altri numeri fuori dalle intestazioni delle tre sezioni.
 """
